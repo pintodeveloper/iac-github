@@ -3,12 +3,111 @@ Description: EC2 creada desde GitHub Actions
 
 Resources:
 
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permite trafico HTTP hacia la instancia EC2
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP desde internet
+      Tags:
+        - Key: Name
+          Value: SG-EC2-HTTP
+
   MyEC2:
     Type: AWS::EC2::Instance
     Properties:
       AvailabilityZone: us-east-1a
       ImageId: ami-0cca150d127c2216f
       InstanceType: t3.micro
+      SecurityGroupIds:
+        - !GetAtt WebSecurityGroup.GroupId
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          WEB_ROOT="/var/www/html"
+          WEB_SERVICE=""
+
+          if command -v dnf >/dev/null 2>&1; then
+            dnf install -y httpd
+            WEB_SERVICE="httpd"
+          elif command -v yum >/dev/null 2>&1; then
+            yum install -y httpd
+            WEB_SERVICE="httpd"
+          elif command -v apt-get >/dev/null 2>&1; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y apache2
+            WEB_SERVICE="apache2"
+          else
+            echo "No se encontro un administrador de paquetes soportado." >&2
+            exit 1
+          fi
+
+          systemctl enable --now "$WEB_SERVICE"
+
+          TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
+          if [ -n "$TOKEN" ]; then
+            INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/instance-id" || echo "unknown")
+            AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/placement/availability-zone" || echo "unknown")
+          else
+            INSTANCE_ID="unknown"
+            AZ="unknown"
+          fi
+
+          cat > "$WEB_ROOT/index.html" <<EOF
+          <!DOCTYPE html>
+          <html lang="es">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <title>EC2 lista</title>
+            <style>
+              body {
+                margin: 0;
+                min-height: 100vh;
+                display: grid;
+                place-items: center;
+                font-family: Arial, sans-serif;
+                background: #111827;
+                color: #f9fafb;
+              }
+              main {
+                width: min(720px, calc(100% - 32px));
+                padding: 32px;
+                border: 1px solid #374151;
+                border-radius: 8px;
+                background: #1f2937;
+              }
+              h1 {
+                margin: 0 0 12px;
+                font-size: clamp(2rem, 6vw, 4rem);
+              }
+              p {
+                margin: 8px 0;
+                color: #d1d5db;
+                font-size: 1.125rem;
+              }
+              strong {
+                color: #93c5fd;
+              }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>Hola desde EC2</h1>
+              <p>Servidor web instalado automaticamente con UserData.</p>
+              <p>Stack: <strong>${AWS::StackName}</strong></p>
+              <p>Instancia: <strong>$INSTANCE_ID</strong></p>
+              <p>Zona: <strong>$AZ</strong></p>
+            </main>
+          </body>
+          </html>
+          EOF
 
       Tags:
         - Key: Name
@@ -18,3 +117,9 @@ Outputs:
 
   InstanceId:
     Value: !Ref MyEC2
+
+  PublicIp:
+    Value: !GetAtt MyEC2.PublicIp
+
+  WebsiteURL:
+    Value: !Sub "http://${MyEC2.PublicDnsName}"
