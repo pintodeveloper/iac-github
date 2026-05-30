@@ -104,6 +104,7 @@ Resources:
               <p>Stack: <strong>${AWS::StackName}</strong></p>
               <p>Instancia: <strong>$INSTANCE_ID</strong></p>
               <p>Zona: <strong>$AZ</strong></p>
+              <p>77</>
             </main>
           </body>
           </html>
